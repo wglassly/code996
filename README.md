@@ -75,6 +75,12 @@ code996 /workspace         # 自动扫描子目录
 ### 基础命令
 
 - `help`：显示帮助信息
+- `ranking`：统计各提交者的 996 指数并输出排行榜
+
+#### 排行榜选项
+
+- `-n, --limit <number>`：限制榜单作者数量，默认取提交数前 30 名
+- `-a, --author <nameOrEmail>`：仅查看指定作者（名称或邮箱模糊匹配）的 996 指数
 
 #### 时间范围选项
 
@@ -112,6 +118,13 @@ code996 /path/proj1 /path/proj2  # 传入多个路径，自动分析多个仓库
 code996 /workspace             # 扫描指定目录的所有子仓库
 code996 /workspace -y 2025     # 分析2025年的数据和趋势
 code996 --self                 # 只统计当前用户在所有仓库中的提交
+
+# ===== 卷王排行榜 =====
+code996 ranking                # 查看仓库内的卷王排名
+code996 ranking -y 2024        # 查看2024年卷王榜单
+code996 ranking -y 2023-2024   # 查看跨年的卷王榜单
+code996 ranking -n 50          # 查看提交数前 50 名的卷王榜单
+code996 ranking -a alice       # 仅查看名称或邮箱包含 alice 的作者
 
 # 精细分析（半小时粒度）
 code996 --half-hour            # 以半小时粒度展示时间分布
