@@ -506,4 +506,46 @@ export class GitCollector {
   private escapeAuthorPattern(source: string): string {
     return source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   }
+
+  /**
+   * 获取指定时间范围内的提交者列表及提交数
+   */
+  public async listAuthors(options: GitLogOptions): Promise<
+    Array<{ name: string; email: string; label: string; count: number }>
+  > {
+    const { path } = options
+
+    if (!(await this.isValidGitRepo(path))) {
+      throw new Error(`路径 "${path}" 不是一个有效的Git仓库`)
+    }
+
+    const args = ['log', '--format=%an|%ae']
+    this.applyCommonFilters(args, options)
+
+    const output = await this.execGitCommand(args, path)
+    const lines = output.split('\n').filter((line) => line.trim())
+    const authorMap = new Map<string, { name: string; email: string; count: number }>()
+
+    for (const line of lines) {
+      const [rawName = '', rawEmail = ''] = line.split('|')
+      const name = rawName.trim() || '未知用户'
+      const email = rawEmail.trim()
+      const key = `${name}|${email}`
+      const current = authorMap.get(key) || { name, email, count: 0 }
+      current.count += 1
+      authorMap.set(key, current)
+    }
+
+    return Array.from(authorMap.values())
+      .map((item) => ({
+        ...item,
+        label: item.email ? `${item.name} <${item.email}>` : item.name,
+      }))
+      .sort((a, b) => b.count - a.count)
+  }
+
+  /** 构造安全的作者匹配正则，用于 --author 过滤 */
+  public createAuthorPattern(source: string): string {
+    return this.escapeAuthorPattern(source)
+  }
 }

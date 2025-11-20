@@ -33,6 +33,7 @@ export class CLIManager {
     // 注册根命令默认行为，直接执行分析逻辑
     this.setupDefaultAnalyzeAction()
     this.addTrendCommand()
+    this.addRankingCommand()
     this.addHelpCommand()
 
     // 错误处理
@@ -93,6 +94,34 @@ export class CLIManager {
     this.program.addCommand(trendCmd)
   }
 
+  /** 注册 ranking 命令，生成卷王排行榜 */
+  private addRankingCommand(): void {
+    const rankingCmd = new Command('ranking')
+      .description('统计提交者 996 指数排行榜，看看谁是卷王')
+      .option('-s, --since <date>', '开始日期 (YYYY-MM-DD)')
+      .option('-u, --until <date>', '结束日期 (YYYY-MM-DD)')
+      .option('-y, --year <year>', '指定年份或年份范围 (例如: 2025 或 2023-2025)')
+      .option('--all-time', '查询所有时间的数据')
+      .argument('[repoPath]', 'Git 仓库根目录路径（默认当前目录）')
+      .action(async (repoPath: string | undefined, options: AnalyzeOptions, command: Command) => {
+        const processedArgs = typeof repoPath === 'string' ? 1 : 0
+        const extraArgs = (command.args ?? []).slice(processedArgs)
+
+        if (extraArgs.length > 0) {
+          const invalid = extraArgs[0]
+          console.error(chalk.red(`错误: 未知命令 '${invalid}'`))
+          console.log('运行 code996 help 查看可用命令')
+          process.exit(1)
+        }
+
+        const mergedOptions = this.mergeGlobalOptions(options)
+        const targetPath = this.resolveTargetPath(repoPath, `${this.program.name()} ranking`)
+        await this.handleRanking(targetPath, mergedOptions)
+      })
+
+    this.program.addCommand(rankingCmd)
+  }
+
   /** 注册 help 命令，提供统一的帮助入口 */
   private addHelpCommand(): void {
     const helpCmd = new Command('help').description('显示帮助信息').action(() => {
@@ -132,6 +161,14 @@ export class CLIManager {
     const mergedOptions = this.mergeGlobalOptions(options)
     const { TrendExecutor } = await import('./commands/trend')
     await TrendExecutor.execute(targetPath, mergedOptions)
+    printGlobalNotices()
+  }
+
+  /** 处理卷王排行榜执行流程 */
+  private async handleRanking(targetPath: string, options: AnalyzeOptions): Promise<void> {
+    const mergedOptions = this.mergeGlobalOptions(options)
+    const { RankingExecutor } = await import('./commands/ranking')
+    await RankingExecutor.execute(targetPath, mergedOptions)
     printGlobalNotices()
   }
 
@@ -218,9 +255,11 @@ export class CLIManager {
 ${chalk.bold('使用方法:')}
   code996 [选项]
   code996 trend [选项]
+  code996 ranking [选项]
 
 ${chalk.bold('命令:')}
   trend             查看月度996指数和工作时间的变化趋势
+  ranking           查看提交者的996指数排行榜
   help              显示帮助信息
 
 ${chalk.bold('全局选项:')}
@@ -249,6 +288,11 @@ ${chalk.bold('示例:')}
   code996 trend                 # 分析最近一年的月度趋势
   code996 trend -y 2024         # 分析2024年各月趋势
   code996 trend --all-time      # 分析所有时间的月度趋势
+
+  ${chalk.gray('# 卷王排行榜')}
+  code996 ranking               # 查看全仓库卷王榜单
+  code996 ranking -y 2024       # 查看2024年卷王排行
+  code996 ranking -y 2023-2024  # 查看 2023-2024 年度排行
 
 ${chalk.bold('更多详情请访问:')} https://github.com/code996/code996
     `)
