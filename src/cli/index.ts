@@ -12,6 +12,8 @@ export interface AnalyzeOptions {
   allTime?: boolean
   year?: string
   self?: boolean
+  limit?: number
+  author?: string
 }
 
 export class CLIManager {
@@ -101,6 +103,8 @@ export class CLIManager {
       .option('-s, --since <date>', '开始日期 (YYYY-MM-DD)')
       .option('-u, --until <date>', '结束日期 (YYYY-MM-DD)')
       .option('-y, --year <year>', '指定年份或年份范围 (例如: 2025 或 2023-2025)')
+      .option('-n, --limit <number>', '统计排名的作者数量（默认 30）')
+      .option('-a, --author <nameOrEmail>', '指定作者名称或邮箱，仅查看该作者的 996 指数')
       .option('--all-time', '查询所有时间的数据')
       .argument('[repoPath]', 'Git 仓库根目录路径（默认当前目录）')
       .action(async (repoPath: string | undefined, options: AnalyzeOptions, command: Command) => {
@@ -182,6 +186,8 @@ export class CLIManager {
       since: options.since ?? globalOpts.since,
       until: options.until ?? globalOpts.until,
       year: options.year ?? globalOpts.year,
+      limit: options.limit ?? globalOpts.limit,
+      author: options.author ?? globalOpts.author,
     }
   }
 
@@ -293,6 +299,8 @@ ${chalk.bold('示例:')}
   code996 ranking               # 查看全仓库卷王榜单
   code996 ranking -y 2024       # 查看2024年卷王排行
   code996 ranking -y 2023-2024  # 查看 2023-2024 年度排行
+  code996 ranking -n 50         # 扩大榜单统计到提交数前 50 名
+  code996 ranking -a alice      # 仅查看名称或邮箱包含 alice 的作者
 
 ${chalk.bold('更多详情请访问:')} https://github.com/code996/code996
     `)

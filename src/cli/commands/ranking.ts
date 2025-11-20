@@ -31,6 +31,8 @@ export class RankingExecutor {
     try {
       const collector = new GitCollector()
       const { since, until, mode, note } = await resolveTimeRange({ collector, path, options })
+      const limit = normalizeLimit(options.limit)
+      const authorQuery = options.author?.trim()
 
       console.log(chalk.blue('🔍 卷王排行榜仓库:'), path || process.cwd())
       const periodText = buildPeriodText({ since, until, mode, note, options })
@@ -44,10 +46,24 @@ export class RankingExecutor {
         return
       }
 
+      const filteredAuthors = filterAuthors(authorList, authorQuery)
+
+      if (authorQuery && filteredAuthors.length === 0) {
+        console.log(chalk.yellow(`未找到匹配作者: ${authorQuery}`))
+        return
+      }
+
+      const limitedAuthors = authorQuery ? filteredAuthors : filteredAuthors.slice(0, limit)
+
+      if (!authorQuery && authorList.length > limitedAuthors.length) {
+        console.log(chalk.gray(`提示: 作者过多，默认仅统计提交数排名前 ${limit} 位。使用 --limit 可调整数量。`))
+        console.log()
+      }
+
       const spinner = ora('📦 正在计算卷王排行榜...').start()
       const ranking: AuthorRankingEntry[] = []
 
-      for (const author of authorList) {
+      for (const author of limitedAuthors) {
         spinner.text = `计算 ${author.label} 的 996 指数...`
 
         const authorPatternSource = author.email || author.name
@@ -159,6 +175,29 @@ function formatRiskColor(value: number): (text: string) => string {
   if (value <= 50) return chalk.yellow
   if (value <= 80) return chalk.keyword('orange')
   return chalk.red
+}
+
+type AuthorInfo = { name: string; email: string; label: string; count: number }
+
+function filterAuthors(authors: AuthorInfo[], query?: string): AuthorInfo[] {
+  if (!query) return authors
+
+  const keyword = query.toLowerCase()
+  return authors.filter((author) => {
+    const name = author.name.toLowerCase()
+    const email = author.email.toLowerCase()
+    const label = author.label.toLowerCase()
+    return name.includes(keyword) || email.includes(keyword) || label.includes(keyword)
+  })
+}
+
+function normalizeLimit(limit?: number): number {
+  const parsed = Number(limit)
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return Math.min(Math.floor(parsed), 500)
+  }
+
+  return 30
 }
 
 function scaleWidths(base: number[], terminalWidth: number): number[] {
