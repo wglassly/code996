@@ -124,9 +124,7 @@ code996 ranking                # 查看仓库内的卷王排名
 code996 ranking -y 2024        # 查看2024年卷王榜单
 code996 ranking -y 2023-2024   # 查看跨年的卷王榜单
 code996 ranking -n 50          # 查看提交数前 50 名的卷王榜单
-code996 ranking --self         # 仅查看当前 Git 用户的996指数
-code996 ranking -a alice bob   # 同时查看多个指定作者的 996 指数
-code996 ranking --author-whitelist ./authors.txt  # 按白名单文件中的作者生成榜单
+code996 ranking -a alice       # 仅查看名称或邮箱包含 alice 的作者
 
 # 精细分析（半小时粒度）
 code996 --half-hour            # 以半小时粒度展示时间分布
