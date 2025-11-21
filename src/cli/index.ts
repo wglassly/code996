@@ -13,7 +13,8 @@ export interface AnalyzeOptions {
   year?: string
   self?: boolean
   limit?: number
-  author?: string
+  author?: string | string[]
+  whitelist?: string
 }
 
 export class CLIManager {
@@ -105,6 +106,8 @@ export class CLIManager {
       .option('-y, --year <year>', '指定年份或年份范围 (例如: 2025 或 2023-2025)')
       .option('-n, --limit <number>', '统计排名的作者数量（默认 30）')
       .option('-a, --author <nameOrEmail>', '指定作者名称或邮箱，仅查看该作者的 996 指数')
+      .option('--self', '仅统计当前 Git 用户的提交')
+      .option('-w, --whitelist <file>', '指定用户白名单配置文件，仅统计名单中的作者')
       .option('--all-time', '查询所有时间的数据')
       .argument('[repoPath]', 'Git 仓库根目录路径（默认当前目录）')
       .action(async (repoPath: string | undefined, options: AnalyzeOptions, command: Command) => {
@@ -188,6 +191,7 @@ export class CLIManager {
       year: options.year ?? globalOpts.year,
       limit: options.limit ?? globalOpts.limit,
       author: options.author ?? globalOpts.author,
+      whitelist: options.whitelist ?? globalOpts.whitelist,
     }
   }
 
