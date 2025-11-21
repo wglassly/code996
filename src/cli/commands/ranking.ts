@@ -1,6 +1,8 @@
 import chalk from 'chalk'
 import ora from 'ora'
 import Table from 'cli-table3'
+import fs from 'fs'
+import path from 'path'
 import { GitCollector } from '../../git/git-collector'
 import { GitParser } from '../../git/git-parser'
 import { AnalyzeOptions } from '../index'
@@ -26,36 +28,57 @@ interface TimeRangeResult {
   note?: string
 }
 
+interface AuthorTarget {
+  label: string
+  pattern: string
+}
+
 export class RankingExecutor {
   static async execute(path: string, options: AnalyzeOptions): Promise<void> {
     try {
       const collector = new GitCollector()
       const { since, until, mode, note } = await resolveTimeRange({ collector, path, options })
       const limit = normalizeLimit(options.limit)
-      const authorQuery = options.author?.trim()
+      const authorQueries = parseAuthorQueries(options.author)
+
+      if (options.self && authorQueries.length > 0) {
+        console.log(chalk.yellow('⚠️ 同时指定 --self 与 --author，仅会使用 --self 进行过滤'))
+      }
 
       console.log(chalk.blue('🔍 卷王排行榜仓库:'), path || process.cwd())
       const periodText = buildPeriodText({ since, until, mode, note, options })
       console.log(chalk.blue('📅 时间范围:'), periodText)
       console.log()
 
-      const authorList = await collector.listAuthors({ path, since, until, silent: true })
+      const whitelist = loadWhitelist(options.whitelist)
+      let authorList = await collector.listAuthors({ path, since, until, silent: true })
+
+      if (whitelist) {
+        authorList = filterByWhitelist(authorList, whitelist)
+        console.log(chalk.blue('📜 白名单过滤:'), `${authorList.length} 位作者符合配置`)
+        console.log()
+      }
 
       if (authorList.length === 0) {
         console.log(chalk.yellow('🤷 仓库中没有可统计的提交者'))
         return
       }
 
-      const filteredAuthors = filterAuthors(authorList, authorQuery)
+      const targets = await resolveAuthorTargets({
+        collector,
+        path,
+        authorList,
+        authorQueries,
+        limit,
+        useSelf: Boolean(options.self),
+      })
 
-      if (authorQuery && filteredAuthors.length === 0) {
-        console.log(chalk.yellow(`未找到匹配作者: ${authorQuery}`))
+      if (targets.length === 0) {
+        console.log(chalk.yellow('未找到匹配的作者，无法生成排行榜'))
         return
       }
 
-      const limitedAuthors = authorQuery ? filteredAuthors : filteredAuthors.slice(0, limit)
-
-      if (!authorQuery && authorList.length > limitedAuthors.length) {
+      if (!options.self && authorQueries.length === 0 && authorList.length > targets.length) {
         console.log(chalk.gray(`提示: 作者过多，默认仅统计提交数排名前 ${limit} 位。使用 --limit 可调整数量。`))
         console.log()
       }
@@ -63,15 +86,14 @@ export class RankingExecutor {
       const spinner = ora('📦 正在计算卷王排行榜...').start()
       const ranking: AuthorRankingEntry[] = []
 
-      for (const author of limitedAuthors) {
-        spinner.text = `计算 ${author.label} 的 996 指数...`
+      for (const target of targets) {
+        spinner.text = `计算 ${target.label} 的 996 指数...`
 
-        const authorPatternSource = author.email || author.name
         const authorOptions: GitLogOptions = {
           path,
           since,
           until,
-          authorPattern: collector.createAuthorPattern(authorPatternSource),
+          authorPattern: target.pattern,
           silent: true,
         }
 
@@ -82,7 +104,7 @@ export class RankingExecutor {
         const weekendRate = rawData.totalCommits > 0 ? (weekendCommits / rawData.totalCommits) * 100 : 0
 
         ranking.push({
-          author: author.label,
+          author: target.label,
           commits: rawData.totalCommits,
           index996: result.index996,
           indexText: result.index996Str,
@@ -179,6 +201,13 @@ function formatRiskColor(value: number): (text: string) => string {
 
 type AuthorInfo = { name: string; email: string; label: string; count: number }
 
+function parseAuthorQueries(authorOption?: string | string[]): string[] {
+  if (!authorOption) return []
+
+  const tokens = Array.isArray(authorOption) ? authorOption : authorOption.split(',')
+  return tokens.map((item) => item.trim()).filter(Boolean)
+}
+
 function filterAuthors(authors: AuthorInfo[], query?: string): AuthorInfo[] {
   if (!query) return authors
 
@@ -189,6 +218,107 @@ function filterAuthors(authors: AuthorInfo[], query?: string): AuthorInfo[] {
     const label = author.label.toLowerCase()
     return name.includes(keyword) || email.includes(keyword) || label.includes(keyword)
   })
+}
+
+function filterByWhitelist(authors: AuthorInfo[], whitelist: string[]): AuthorInfo[] {
+  if (whitelist.length === 0) return authors
+
+  const keywords = whitelist.map((item) => item.toLowerCase())
+
+  return authors.filter((author) => {
+    const name = author.name.toLowerCase()
+    const email = author.email.toLowerCase()
+    const label = author.label.toLowerCase()
+
+    return keywords.some((entry) =>
+      name.includes(entry) || (email && email.includes(entry)) || label.includes(entry)
+    )
+  })
+}
+
+function loadWhitelist(configPath?: string): string[] | null {
+  if (!configPath) return null
+
+  const resolvedPath = path.resolve(configPath)
+
+  if (!fs.existsSync(resolvedPath)) {
+    console.error(chalk.red('❌ 未找到白名单配置文件:'), resolvedPath)
+    process.exit(1)
+  }
+
+  try {
+    const content = fs.readFileSync(resolvedPath, 'utf-8')
+    const parsed = JSON.parse(content)
+
+    if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string')) {
+      throw new Error('白名单文件格式应为字符串数组')
+    }
+
+    return parsed.map((item) => item.trim()).filter(Boolean)
+  } catch (error) {
+    console.error(chalk.red('❌ 读取白名单配置失败:'), (error as Error).message)
+    process.exit(1)
+  }
+}
+
+interface ResolveAuthorTargetsParams {
+  collector: GitCollector
+  path: string
+  authorList: AuthorInfo[]
+  authorQueries: string[]
+  limit: number
+  useSelf: boolean
+}
+
+async function resolveAuthorTargets({
+  collector,
+  path,
+  authorList,
+  authorQueries,
+  limit,
+  useSelf,
+}: ResolveAuthorTargetsParams): Promise<AuthorTarget[]> {
+  if (useSelf) {
+    const selfInfo = await collector.resolveSelfAuthor(path)
+    return [
+      {
+        label: selfInfo.displayLabel,
+        pattern: selfInfo.pattern,
+      },
+    ]
+  }
+
+  if (authorQueries.length > 0) {
+    const targets: AuthorTarget[] = []
+    const seen = new Set<string>()
+
+    for (const query of authorQueries) {
+      const matches = filterAuthors(authorList, query)
+
+      if (matches.length === 0) {
+        console.log(chalk.yellow(`未找到匹配作者: ${query}`))
+        continue
+      }
+
+      for (const author of matches) {
+        if (seen.has(author.label)) continue
+
+        targets.push({
+          label: author.label,
+          pattern: collector.createAuthorPattern(author.email || author.name),
+        })
+        seen.add(author.label)
+      }
+    }
+
+    return targets
+  }
+
+  const limitedAuthors = authorList.slice(0, limit)
+  return limitedAuthors.map((author) => ({
+    label: author.label,
+    pattern: collector.createAuthorPattern(author.email || author.name),
+  }))
 }
 
 function normalizeLimit(limit?: number): number {

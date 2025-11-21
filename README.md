@@ -80,7 +80,9 @@ code996 /workspace         # 自动扫描子目录
 #### 排行榜选项
 
 - `-n, --limit <number>`：限制榜单作者数量，默认取提交数前 30 名
-- `-a, --author <nameOrEmail>`：仅查看指定作者（名称或邮箱模糊匹配）的 996 指数
+- `-a, --author <nameOrEmail>`：仅查看指定作者（名称或邮箱模糊匹配）的 996 指数，支持用逗号分隔多个值
+- `--self`：仅统计当前 Git 用户在排行榜中的表现
+- `-w, --whitelist <file>`：传入白名单配置文件，仅统计名单中的用户
 
 #### 时间范围选项
 
@@ -125,6 +127,8 @@ code996 ranking -y 2024        # 查看2024年卷王榜单
 code996 ranking -y 2023-2024   # 查看跨年的卷王榜单
 code996 ranking -n 50          # 查看提交数前 50 名的卷王榜单
 code996 ranking -a alice       # 仅查看名称或邮箱包含 alice 的作者
+code996 ranking -a "alice,bob"  # 同时查看 alice 和 bob 的排行榜数据
+code996 ranking -w whitelist.json  # 只统计白名单文件中的用户
 
 # 精细分析（半小时粒度）
 code996 --half-hour            # 以半小时粒度展示时间分布
