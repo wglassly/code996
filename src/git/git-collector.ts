@@ -10,6 +10,16 @@ import {
 } from '../types/git-types'
 import chalk from 'chalk'
 
+type MutableAuthorStats = {
+  byHour: number[]
+  byDay: number[]
+  dayHour: number[][]
+  dailyFirst: Map<string, number>
+  dailyLatest: Map<string, number>
+  dailyHours: Map<string, Set<number>>
+  totalCommits: number
+}
+
 export class GitCollector {
   private static readonly DEFAULT_SINCE = '1970-01-01'
   private static readonly DEFAULT_UNTIL = '2100-01-01'
@@ -444,6 +454,217 @@ export class GitCollector {
       }
       throw error
     }
+  }
+
+  /**
+   * 批量收集多个作者的 Git 数据，仅需一次 git log，避免重复扫描
+   */
+  public async collectByAuthors(
+    options: GitLogOptions,
+    targets: Array<{ id: string; matchKey?: string; pattern?: string }>
+  ): Promise<Map<string, GitLogData>> {
+    if (targets.length === 0) {
+      return new Map()
+    }
+
+    if (!(await this.isValidGitRepo(options.path))) {
+      throw new Error(`路径 "${options.path}" 不是一个有效的Git仓库`)
+    }
+
+    const normalizedTargets = targets.map((item) => ({
+      id: item.id,
+      matchKey: item.matchKey ? item.matchKey.toLowerCase() : undefined,
+      pattern: item.pattern,
+    }))
+
+    const keyToIds = new Map<string, string[]>()
+    for (const item of normalizedTargets) {
+      if (item.matchKey) {
+        const existing = keyToIds.get(item.matchKey) || []
+        existing.push(item.id)
+        keyToIds.set(item.matchKey, existing)
+      }
+    }
+
+    const regexTargets = normalizedTargets
+      .filter((item) => !item.matchKey && item.pattern)
+      .map((item) => ({
+        id: item.id,
+        regex: new RegExp(item.pattern!, 'i'),
+      }))
+
+    const args = ['log', '--format=%an|%ae|%ct']
+    if (options.since) {
+      args.push(`--since=${options.since}`)
+    }
+    if (options.until) {
+      args.push(`--until=${options.until}`)
+    }
+
+    const output = await this.execGitCommand(args, options.path)
+    const lines = output.split('\n').filter((line) => line.trim())
+    const statsMap = new Map<string, MutableAuthorStats>()
+
+    for (const line of lines) {
+      const [rawName = '', rawEmail = '', rawTimestamp = ''] = line.split('|')
+      const timestamp = parseInt(rawTimestamp.trim(), 10)
+      if (!Number.isFinite(timestamp)) {
+        continue
+      }
+
+      const name = rawName.trim()
+      const email = rawEmail.trim()
+      const key = this.buildAuthorKey(name, email)
+
+      const directTargets = keyToIds.get(key)
+      if (directTargets && directTargets.length > 0) {
+        for (const targetId of directTargets) {
+          const stats = this.ensureAuthorStats(statsMap, targetId)
+          this.updateAuthorStats(stats, timestamp)
+        }
+        continue
+      }
+
+      let regexMatchId: string | undefined
+      for (const candidate of regexTargets) {
+        if (candidate.regex.test(name) || candidate.regex.test(email) || candidate.regex.test(`${name} <${email}>`)) {
+          regexMatchId = candidate.id
+          break
+        }
+      }
+
+      if (!regexMatchId) {
+        continue
+      }
+
+      const stats = this.ensureAuthorStats(statsMap, regexMatchId)
+      this.updateAuthorStats(stats, timestamp)
+    }
+
+    const result = new Map<string, GitLogData>()
+    statsMap.forEach((stats, id) => {
+      result.set(id, this.toGitLogData(stats))
+    })
+
+    return result
+  }
+
+  private ensureAuthorStats(map: Map<string, MutableAuthorStats>, id: string): MutableAuthorStats {
+    let stats = map.get(id)
+    if (!stats) {
+      stats = this.createEmptyAuthorStats()
+      map.set(id, stats)
+    }
+    return stats
+  }
+
+  private createEmptyAuthorStats(): MutableAuthorStats {
+    return {
+      byHour: Array(24).fill(0),
+      byDay: Array(7).fill(0),
+      dayHour: Array.from({ length: 7 }, () => Array(24).fill(0)),
+      dailyFirst: new Map(),
+      dailyLatest: new Map(),
+      dailyHours: new Map(),
+      totalCommits: 0,
+    }
+  }
+
+  private updateAuthorStats(stats: MutableAuthorStats, timestamp: number): void {
+    const commitDate = new Date(timestamp * 1000)
+    const hour = commitDate.getHours()
+    const weekday = ((commitDate.getDay() + 6) % 7) + 1 // 转换为 1-7，周一为 1
+    const minutesFromMidnight = hour * 60 + commitDate.getMinutes()
+    const dateKey = this.formatDateKey(commitDate)
+
+    stats.totalCommits += 1
+    stats.byHour[hour] += 1
+    stats.byDay[weekday - 1] += 1
+    stats.dayHour[weekday - 1][hour] += 1
+
+    const existingFirst = stats.dailyFirst.get(dateKey)
+    if (existingFirst === undefined || minutesFromMidnight < existingFirst) {
+      stats.dailyFirst.set(dateKey, minutesFromMidnight)
+    }
+
+    const existingLast = stats.dailyLatest.get(dateKey)
+    if (existingLast === undefined || minutesFromMidnight > existingLast) {
+      stats.dailyLatest.set(dateKey, minutesFromMidnight)
+    }
+
+    if (!stats.dailyHours.has(dateKey)) {
+      stats.dailyHours.set(dateKey, new Set())
+    }
+    stats.dailyHours.get(dateKey)!.add(hour)
+  }
+
+  private formatDateKey(date: Date): string {
+    const year = date.getFullYear()
+    const month = `${date.getMonth() + 1}`.padStart(2, '0')
+    const day = `${date.getDate()}`.padStart(2, '0')
+    return `${year}-${month}-${day}`
+  }
+
+  private toGitLogData(stats: MutableAuthorStats): GitLogData {
+    const byHour = stats.byHour.map((count, hour) => ({
+      time: hour.toString().padStart(2, '0'),
+      count,
+    }))
+
+    const byDay = stats.byDay.map((count, index) => ({
+      time: (index + 1).toString(),
+      count,
+    }))
+
+    const dayHourCommits: DayHourCommit[] = []
+    stats.dayHour.forEach((hours, dayIndex) => {
+      hours.forEach((count, hour) => {
+        if (count > 0) {
+          dayHourCommits.push({
+            weekday: dayIndex + 1,
+            hour,
+            count,
+          })
+        }
+      })
+    })
+
+    const dailyFirstCommits = Array.from(stats.dailyFirst.entries())
+      .map(([date, minutesFromMidnight]) => ({
+        date,
+        minutesFromMidnight,
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date))
+
+    const dailyLatestCommits = Array.from(stats.dailyLatest.entries())
+      .map(([date, minutes]) => ({
+        date,
+        hour: Math.floor(minutes / 60),
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date))
+
+    const dailyCommitHours = Array.from(stats.dailyHours.entries())
+      .map(([date, hours]) => ({
+        date,
+        hours,
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date))
+
+    return {
+      byHour,
+      byDay,
+      totalCommits: stats.totalCommits,
+      dailyFirstCommits: dailyFirstCommits.length > 0 ? dailyFirstCommits : undefined,
+      dayHourCommits: dayHourCommits.length > 0 ? dayHourCommits : undefined,
+      dailyLatestCommits: dailyLatestCommits.length > 0 ? dailyLatestCommits : undefined,
+      dailyCommitHours: dailyCommitHours.length > 0 ? dailyCommitHours : undefined,
+    }
+  }
+
+  private buildAuthorKey(name: string, email: string): string {
+    const normalizedName = (name || '').trim().toLowerCase()
+    const normalizedEmail = (email || '').trim().toLowerCase()
+    return `${normalizedName}|${normalizedEmail}`
   }
 
   /**

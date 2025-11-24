@@ -31,6 +31,7 @@ interface TimeRangeResult {
 interface AuthorTarget {
   label: string
   pattern: string
+  matchKey?: string
 }
 
 export class RankingExecutor {
@@ -83,21 +84,26 @@ export class RankingExecutor {
         console.log()
       }
 
-      const spinner = ora('📦 正在计算卷王排行榜...').start()
+      const spinner = ora('📦 正在批量解析提交数据...').start()
+      const logOptions: GitLogOptions = { path, since, until, silent: true }
+      const authorData = await collector.collectByAuthors(
+        logOptions,
+        targets.map((item) => ({
+          id: item.label,
+          matchKey: item.matchKey,
+          pattern: item.pattern,
+        }))
+      )
+
+      spinner.text = '正在计算各作者的 996 指数...'
       const ranking: AuthorRankingEntry[] = []
 
       for (const target of targets) {
-        spinner.text = `计算 ${target.label} 的 996 指数...`
-
-        const authorOptions: GitLogOptions = {
-          path,
-          since,
-          until,
-          authorPattern: target.pattern,
-          silent: true,
+        const rawData = authorData.get(target.label)
+        if (!rawData) {
+          continue
         }
 
-        const rawData = await collector.collect(authorOptions)
         const parsedData = GitParser.parseGitData(rawData, undefined, since, until)
         const result = GitParser.calculate996Index(parsedData)
         const weekendCommits = parsedData.workWeekPl[1].count
@@ -114,6 +120,14 @@ export class RankingExecutor {
       }
 
       spinner.succeed('排行榜计算完成！')
+
+      if (ranking.length < targets.length) {
+        console.log(chalk.gray(`提示: ${targets.length - ranking.length} 位作者未匹配到提交，可能因为邮箱或昵称变更。`))
+      }
+      if (ranking.length === 0) {
+        console.log(chalk.yellow('未找到可计算的提交数据，排行榜为空'))
+        return
+      }
       console.log()
 
       const sortedRanking = ranking.sort((a, b) => b.index996 - a.index996)
@@ -236,6 +250,18 @@ function filterByWhitelist(authors: AuthorInfo[], whitelist: string[]): AuthorIn
   })
 }
 
+function buildAuthorKey(name: string, email: string): string {
+  const normalizedName = (name || '').trim().toLowerCase()
+  const normalizedEmail = (email || '').trim().toLowerCase()
+  return `${normalizedName}|${normalizedEmail}`
+}
+
+function doesAuthorMatchPattern(pattern: string, author: AuthorInfo): boolean {
+  if (!pattern) return false
+  const regex = new RegExp(pattern, 'i')
+  return regex.test(author.name) || regex.test(author.email) || regex.test(author.label)
+}
+
 function loadWhitelist(configPath?: string): string[] | null {
   if (!configPath) return null
 
@@ -280,10 +306,12 @@ async function resolveAuthorTargets({
 }: ResolveAuthorTargetsParams): Promise<AuthorTarget[]> {
   if (useSelf) {
     const selfInfo = await collector.resolveSelfAuthor(path)
+    const matchedAuthor = authorList.find((item) => doesAuthorMatchPattern(selfInfo.pattern, item))
     return [
       {
         label: selfInfo.displayLabel,
         pattern: selfInfo.pattern,
+        matchKey: matchedAuthor ? buildAuthorKey(matchedAuthor.name, matchedAuthor.email) : undefined,
       },
     ]
   }
@@ -306,6 +334,7 @@ async function resolveAuthorTargets({
         targets.push({
           label: author.label,
           pattern: collector.createAuthorPattern(author.email || author.name),
+          matchKey: buildAuthorKey(author.name, author.email),
         })
         seen.add(author.label)
       }
@@ -318,6 +347,7 @@ async function resolveAuthorTargets({
   return limitedAuthors.map((author) => ({
     label: author.label,
     pattern: collector.createAuthorPattern(author.email || author.name),
+    matchKey: buildAuthorKey(author.name, author.email),
   }))
 }
 
