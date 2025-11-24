@@ -354,7 +354,7 @@ async function resolveAuthorTargets({
 function normalizeLimit(limit?: number): number {
   const parsed = Number(limit)
   if (Number.isFinite(parsed) && parsed > 0) {
-    return Math.min(Math.floor(parsed), 500)
+    return Math.min(Math.floor(parsed), 3000)
   }
 
   return 30
